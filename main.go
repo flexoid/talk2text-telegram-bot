@@ -10,8 +10,7 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/davecgh/go-spew/spew"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/joho/godotenv"
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -40,16 +39,21 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// TODO: Remove in production.
 	bot.Debug = true
 
 	log.Printf("Authorized on account %s", bot.Self.UserName)
 
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
+	updateConfig := tgbotapi.NewUpdate(0)
+	updateConfig.Timeout = 30
 
-	updates, err := bot.GetUpdatesChan(u)
+	updates := bot.GetUpdatesChan(updateConfig)
 
 	for update := range updates {
+		if update.Message == nil {
+			continue
+		}
+
 		err := handleMessage(bot, openaiClient, update.Message)
 		if err != nil {
 			log.Printf("Failed to handle message: %v", err)
@@ -59,12 +63,12 @@ func main() {
 
 func handleMessage(bot *tgbotapi.BotAPI, openaiClient *openai.Client, message *tgbotapi.Message) error {
 	// Check if update is a voice message.
-	if message == nil || message.Voice == nil {
+	if message.Voice == nil {
+		log.Printf("Not a voice message")
 		return nil
 	}
 
-	spew.Dump(message)
-
+	// TODO: Is username personal data? Should I log it?
 	log.Printf("Received a new voice message from %s", message.From.UserName)
 
 	// Get the voice file.
@@ -90,7 +94,7 @@ func handleMessage(bot *tgbotapi.BotAPI, openaiClient *openai.Client, message *t
 		return fmt.Errorf("Failed to transcribe the voice file: %v", err)
 	}
 
-	err = sendTranscriptionResult(bot, message.Chat.ID, text)
+	err = sendTranscriptionResult(bot, message, text)
 	if err != nil {
 		return fmt.Errorf("Failed to send the transcription result: %v", err)
 	}
@@ -131,8 +135,10 @@ func transcribeFile(openaiClient *openai.Client, filePath string) (string, error
 	return audioResponse.Text, nil
 }
 
-func sendTranscriptionResult(bot *tgbotapi.BotAPI, chatID int64, text string) error {
-	msg := tgbotapi.NewMessage(chatID, text)
+func sendTranscriptionResult(bot *tgbotapi.BotAPI, message *tgbotapi.Message, text string) error {
+	msg := tgbotapi.NewMessage(message.Chat.ID, text)
+	msg.ReplyToMessageID = message.MessageID
+
 	_, err := bot.Send(msg)
 	if err != nil {
 		return fmt.Errorf("Failed to send the transcription result: %v", err)
