@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,36 +12,42 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/joho/godotenv"
 	openai "github.com/sashabaranov/go-openai"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func main() {
+	logger, debug := setupLogger()
+	defer logger.Sync()
+
 	// Load dotenv file.
 	err := godotenv.Load()
 	if err != nil {
-		log.Fatal("Failed to load .env file")
+		logger.Fatal("Failed to load .env file")
 	}
 
 	botToken := os.Getenv("BOT_TOKEN")
 	if botToken == "" {
-		log.Fatal("BOT_TOKEN environment variable is not set.")
+		logger.Fatal("BOT_TOKEN environment variable is not set.")
 	}
 
 	openaiToken := os.Getenv("OPENAI_API_KEY")
 	if openaiToken == "" {
-		log.Fatal("OPENAI_API_KEY environment variable is not set.")
+		logger.Fatal("OPENAI_API_KEY environment variable is not set.")
 	}
 
 	openaiClient := openai.NewClient(openaiToken)
 
 	bot, err := tgbotapi.NewBotAPI(botToken)
 	if err != nil {
-		log.Fatal(err)
+		logger.Fatal(err)
 	}
 
-	// TODO: Remove in production.
-	bot.Debug = true
+	if debug {
+		bot.Debug = true
+	}
 
-	log.Printf("Authorized on account %s", bot.Self.UserName)
+	logger.Infof("Authorized on account %s", bot.Self.UserName)
 
 	updateConfig := tgbotapi.NewUpdate(0)
 	updateConfig.Timeout = 30
@@ -54,22 +59,22 @@ func main() {
 			continue
 		}
 
-		err := handleMessage(bot, openaiClient, update.Message)
+		err := handleMessage(bot, openaiClient, logger, update.Message)
 		if err != nil {
-			log.Printf("Failed to handle message: %v", err)
+			logger.Errorf("Failed to handle message: %v", err)
 		}
 	}
 }
 
-func handleMessage(bot *tgbotapi.BotAPI, openaiClient *openai.Client, message *tgbotapi.Message) error {
+func handleMessage(bot *tgbotapi.BotAPI, openaiClient *openai.Client, logger *zap.SugaredLogger, message *tgbotapi.Message) error {
 	// Check if update is a voice message.
 	if message.Voice == nil {
-		log.Printf("Not a voice message")
+		logger.Debug("Not a voice message")
 		return nil
 	}
 
-	// TODO: Is username personal data? Should I log it?
-	log.Printf("Received a new voice message from %s", message.From.UserName)
+	// TODO: Check if user ID is not personally identifiable information.
+	logger.Debugf("Received a new voice message from %s", message.From.ID)
 
 	err := sendTypingAction(bot, message.Chat.ID)
 	if err != nil {
@@ -177,4 +182,35 @@ func sendTypingAction(bot *tgbotapi.BotAPI, chatID int64) error {
 	}
 
 	return nil
+}
+
+// Returns logger and whether it's in debug mode.
+func setupLogger() (*zap.SugaredLogger, bool) {
+	logCfg := zap.NewProductionConfig()
+	logCfg.Sampling = nil
+
+	level, err := zapcore.ParseLevel(os.Getenv("LOG_LEVEL"))
+	if err == nil {
+		logCfg.Level.SetLevel(level)
+	}
+
+	zapLogger := zap.Must(logCfg.Build())
+	zap.ReplaceGlobals(zapLogger)
+
+	sugar := zapLogger.Sugar()
+	tgbotapi.SetLogger(TgBotLogWrapper{logger: sugar})
+
+	return sugar, level <= zap.DebugLevel
+}
+
+type TgBotLogWrapper struct {
+	logger *zap.SugaredLogger
+}
+
+func (l TgBotLogWrapper) Printf(format string, v ...interface{}) {
+	l.logger.Debugf(format, v...)
+}
+
+func (l TgBotLogWrapper) Println(v ...interface{}) {
+	l.logger.Debug(v...)
 }
