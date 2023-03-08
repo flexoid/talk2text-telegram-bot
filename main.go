@@ -71,6 +71,11 @@ func handleMessage(bot *tgbotapi.BotAPI, openaiClient *openai.Client, message *t
 	// TODO: Is username personal data? Should I log it?
 	log.Printf("Received a new voice message from %s", message.From.UserName)
 
+	err := sendTypingAction(bot, message.Chat.ID)
+	if err != nil {
+		return fmt.Errorf("sending typing action: %v", err)
+	}
+
 	// Get the voice file.
 	tgFileURL, err := bot.GetFileDirectURL(message.Voice.FileID)
 	if err != nil {
@@ -162,4 +167,14 @@ func transcodeOggToMp3(filePath string) (string, error) {
 	}
 
 	return tmpfile.Name(), nil
+}
+
+func sendTypingAction(bot *tgbotapi.BotAPI, chatID int64) error {
+	action := tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping)
+	_, err := bot.Request(action)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
