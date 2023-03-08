@@ -84,29 +84,44 @@ func handleMessage(bot *tgbotapi.BotAPI, openaiClient *openai.Client, logger *za
 	// Get the voice file.
 	tgFileURL, err := bot.GetFileDirectURL(message.Voice.FileID)
 	if err != nil {
-		return fmt.Errorf("Failed to get voice file URL: %v", err)
+		return fmt.Errorf("voice file URL: %v", err)
 	}
 
 	// Download the voice file.
 	origFilePath, err := downloadFile(tgFileURL)
 	if err != nil {
-		return fmt.Errorf("Failed to download voice file: %v", err)
+		return fmt.Errorf("downloading voice file: %v", err)
 	}
 
 	// Transcode the voice file to mp3.
 	transcodedFilePath, err := transcodeOggToMp3(origFilePath)
 	if err != nil {
-		return fmt.Errorf("Failed to transcode voice file to mp3: %v", err)
+		return fmt.Errorf("transcoding voice file to mp3: %v", err)
 	}
 
 	text, err := transcribeFile(openaiClient, transcodedFilePath)
 	if err != nil {
-		return fmt.Errorf("Failed to transcribe the voice file: %v", err)
+		return fmt.Errorf("transcribing the voice file: %v", err)
 	}
 
-	err = sendTranscriptionResult(bot, message, text)
+	transcriptionMessage, err := sendTranscriptionResult(bot, message, text)
 	if err != nil {
-		return fmt.Errorf("Failed to send the transcription result: %v", err)
+		return fmt.Errorf("sending the transcription result: %v", err)
+	}
+
+	err = sendTypingAction(bot, message.Chat.ID)
+	if err != nil {
+		return fmt.Errorf("sending typing action before summarization: %v", err)
+	}
+
+	summary, err := summarizeText(openaiClient, text)
+	if err != nil {
+		return fmt.Errorf("summarizing the transcription: %v", err)
+	}
+
+	err = sendSummary(bot, transcriptionMessage, summary)
+	if err != nil {
+		return fmt.Errorf("sending the summary: %v", err)
 	}
 
 	return nil
@@ -145,13 +160,25 @@ func transcribeFile(openaiClient *openai.Client, filePath string) (string, error
 	return audioResponse.Text, nil
 }
 
-func sendTranscriptionResult(bot *tgbotapi.BotAPI, message *tgbotapi.Message, text string) error {
+func sendTranscriptionResult(bot *tgbotapi.BotAPI, message *tgbotapi.Message, text string) (*tgbotapi.Message, error) {
 	msg := tgbotapi.NewMessage(message.Chat.ID, text)
 	msg.ReplyToMessageID = message.MessageID
 
+	transcriptionMessage, err := bot.Send(msg)
+	if err != nil {
+		return nil, err
+	}
+
+	return &transcriptionMessage, nil
+}
+
+func sendSummary(bot *tgbotapi.BotAPI, transcriptionMessage *tgbotapi.Message, summary string) error {
+	msg := tgbotapi.NewMessage(transcriptionMessage.Chat.ID, summary)
+	msg.ReplyToMessageID = transcriptionMessage.MessageID
+
 	_, err := bot.Send(msg)
 	if err != nil {
-		return fmt.Errorf("Failed to send the transcription result: %v", err)
+		return err
 	}
 
 	return nil
@@ -182,6 +209,27 @@ func sendTypingAction(bot *tgbotapi.BotAPI, chatID int64) error {
 	}
 
 	return nil
+}
+
+func summarizeText(openaiClient *openai.Client, text string) (string, error) {
+	summaryResponse, err := openaiClient.CreateChatCompletion(context.TODO(), openai.ChatCompletionRequest{
+		Model: openai.GPT3Dot5Turbo0301,
+		Messages: []openai.ChatCompletionMessage{
+			{
+				Role:    "user",
+				Content: "Detect which language is it and provide the summary in the same language (print only message):\n\n" + text,
+			},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+
+	if len(summaryResponse.Choices) == 0 {
+		return "", fmt.Errorf("no choices returned")
+	}
+
+	return summaryResponse.Choices[0].Message.Content, nil
 }
 
 // Returns logger and whether it's in debug mode.
