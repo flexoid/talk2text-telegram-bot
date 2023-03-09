@@ -23,7 +23,7 @@ func main() {
 	// Load dotenv file.
 	err := godotenv.Load()
 	if err != nil {
-		logger.Fatal("Failed to load .env file")
+		logger.Debug("Could not load .env file, ignoring.")
 	}
 
 	botToken := os.Getenv("BOT_TOKEN")
@@ -93,7 +93,6 @@ func handleMessage(bot *tgbotapi.BotAPI, openaiClient *openai.Client, logger *za
 		return fmt.Errorf("downloading voice file: %v", err)
 	}
 
-	// Transcode the voice file to mp3.
 	transcodedFilePath, err := transcodeOggToMp3(origFilePath)
 	if err != nil {
 		return fmt.Errorf("transcoding voice file to mp3: %v", err)

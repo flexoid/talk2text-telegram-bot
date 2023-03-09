@@ -1,4 +1,4 @@
-module github.com/flexoid/text2talk-telegram-bot
+module github.com/flexoid/talk2text-telegram-bot
 
 go 1.20
 
