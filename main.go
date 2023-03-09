@@ -216,8 +216,10 @@ func summarizeText(openaiClient *openai.Client, text string) (string, error) {
 		Model: openai.GPT3Dot5Turbo0301,
 		Messages: []openai.ChatCompletionMessage{
 			{
-				Role:    "user",
-				Content: "Detect which language is it and provide the summary in the same language (print only message):\n\n" + text,
+				Role: "user",
+				Content: "Detect the language of the provided message and generate the summary using" +
+					" the same language. I don't need to know the detected language, only print the summary." +
+					" Respond using detected language. The message is:\n\n" + text,
 			},
 		},
 	})
