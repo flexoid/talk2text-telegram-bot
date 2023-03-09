@@ -16,6 +16,11 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+type Authenticator interface {
+	CheckAuth(userID int64) bool
+	Authenticate(userID int64, text string) bool
+}
+
 func main() {
 	logger, debug := setupLogger()
 	defer logger.Sync()
@@ -36,6 +41,11 @@ func main() {
 		logger.Fatal("OPENAI_API_KEY environment variable is not set.")
 	}
 
+	pin := os.Getenv("PIN_CODE")
+	if pin == "" {
+		logger.Fatal("PIN_CODE environment variable is not set.")
+	}
+
 	openaiClient := openai.NewClient(openaiToken)
 
 	bot, err := tgbotapi.NewBotAPI(botToken)
@@ -49,6 +59,8 @@ func main() {
 
 	logger.Infof("Authorized on account %s", bot.Self.UserName)
 
+	auth := NewPinAuthenticator(pin)
+
 	updateConfig := tgbotapi.NewUpdate(0)
 	updateConfig.Timeout = 30
 
@@ -59,14 +71,24 @@ func main() {
 			continue
 		}
 
-		err := handleMessage(bot, openaiClient, logger, update.Message)
+		err := handleMessage(bot, openaiClient, auth, logger, update.Message)
 		if err != nil {
 			logger.Errorf("Failed to handle message: %v", err)
 		}
 	}
 }
 
-func handleMessage(bot *tgbotapi.BotAPI, openaiClient *openai.Client, logger *zap.SugaredLogger, message *tgbotapi.Message) error {
+func handleMessage(
+	bot *tgbotapi.BotAPI,
+	openaiClient *openai.Client,
+	auth Authenticator,
+	logger *zap.SugaredLogger,
+	message *tgbotapi.Message,
+) error {
+	if !handleAuth(bot, auth, logger, message) {
+		return nil
+	}
+
 	// Check if update is a voice message.
 	if message.Voice == nil {
 		logger.Debug("Not a voice message")
@@ -124,6 +146,34 @@ func handleMessage(bot *tgbotapi.BotAPI, openaiClient *openai.Client, logger *za
 	}
 
 	return nil
+}
+
+func handleAuth(
+	bot *tgbotapi.BotAPI,
+	auth Authenticator,
+	logger *zap.SugaredLogger,
+	message *tgbotapi.Message,
+) bool {
+	if auth.CheckAuth(message.From.ID) {
+		return true
+	}
+
+	if auth.Authenticate(message.From.ID, message.Text) {
+		logger.Debugf("User %s authenticated successfully", message.From.ID)
+		_, err := bot.Send(tgbotapi.NewMessage(message.Chat.ID, "You are now authenticated."))
+		if err != nil {
+			logger.Warnf("Failed to send authentication success message: %v", err)
+		}
+
+		return true
+	}
+
+	_, err := bot.Send(tgbotapi.NewMessage(message.Chat.ID, "You are not authenticated, please send valid PIN code."))
+	if err != nil {
+		logger.Warnf("Failed to send authentication failure message: %v", err)
+	}
+
+	return false
 }
 
 // Downloads file by provided URL and saves it to temporary file.
